@@ -335,10 +335,6 @@ class RadioManager(
                     .setBufferSizeInBytes(minBuf)
             } else null
 
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && recBuilder != null) {
-                recBuilder.setPerformanceMode(AudioRecord.PERFORMANCE_MODE_LOW_LATENCY)
-            }
-
             audioRecord = recBuilder?.build() ?: AudioRecord(
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 SAMPLE_RATE,
