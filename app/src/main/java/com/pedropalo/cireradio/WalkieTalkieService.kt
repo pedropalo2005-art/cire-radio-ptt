@@ -212,10 +212,10 @@ class WalkieTalkieService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Servicio de Radio CIRE UNAH",
+                "Servicio de Radio Volkee",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Mantiene la radio abierta y escuchando transmisiones de voz"
+                description = "Mantiene la radio Volkee abierta y escuchando transmisiones"
                 setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
@@ -241,7 +241,7 @@ class WalkieTalkieService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
         )
 
-        val title = if (isTx) "🔴 TRANSMITIENDO EN VIVO" else "🟢 CIRE RADIO - ACTIVO"
+        val title = if (isTx) "🔴 TRANSMITIENDO EN VIVO" else "🟢 VOLKEE - ACTIVO"
         val text = "Canal: $channelName | Pulsa Vol- para hablar con pantalla apagada"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
