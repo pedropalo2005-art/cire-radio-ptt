@@ -43,6 +43,7 @@ class RadioManager(
         fun onConnectionChanged(isConnected: Boolean, message: String)
         fun onEngineError(errCode: Int, message: String)
         fun onChannelListUpdated()
+        fun onChannelBusy(speakerUid: Int)
     }
 
     var serverUrl: String = DEFAULT_SERVER_URL
@@ -233,6 +234,14 @@ class RadioManager(
                         listener.onChannelListUpdated()
                     }
                 }
+                "channel_busy" -> {
+                    val speakerUid = json.optInt("speakerUid", 0)
+                    stopTransmitting()
+                    playBusyTone()
+                    mainHandler.post {
+                        listener.onChannelBusy(speakerUid)
+                    }
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -414,6 +423,14 @@ class RadioManager(
     private fun playRogerBeep() {
         try {
             toneGen?.startTone(ToneGenerator.TONE_SUP_RADIO_ACK, 120)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun playBusyTone() {
+        try {
+            toneGen?.startTone(ToneGenerator.TONE_SUP_BUSY, 250)
         } catch (e: Exception) {
             e.printStackTrace()
         }
