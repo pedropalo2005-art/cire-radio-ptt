@@ -42,6 +42,7 @@ class RadioManager(
         fun onRemoteUserTalking(isTalking: Boolean, uid: Int)
         fun onConnectionChanged(isConnected: Boolean, message: String)
         fun onEngineError(errCode: Int, message: String)
+        fun onChannelListUpdated()
     }
 
     var serverUrl: String = DEFAULT_SERVER_URL
@@ -209,6 +210,11 @@ class RadioManager(
                         }
                     }
                 }
+                "channel_created" -> {
+                    mainHandler.post {
+                        listener.onChannelListUpdated()
+                    }
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -233,6 +239,17 @@ class RadioManager(
     fun switchChannel(newChannelName: String) {
         if (currentChannel == newChannelName && isJoined) return
         joinChannel(newChannelName)
+    }
+
+    fun broadcastChannelCreated() {
+        try {
+            val json = JSONObject().apply {
+                put("type", "channel_created")
+            }
+            webSocket?.send(json.toString())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     @SuppressLint("MissingPermission")
