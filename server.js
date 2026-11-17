@@ -1,18 +1,78 @@
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = 8888;
-const ADMIN_KEY = "admin123"; // Clave para eliminar canales desde la web
+const ADMIN_KEY = "admin123"; // Clave de administrador
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+
+// Cargar o inicializar configuración persistente
+let config = {
+  transmissionMode: 'blocked' // 'blocked' (Semidúplex), 'free' (Libre), 'conference' (Conferencia)
+};
+
+try {
+  if (fs.existsSync(CONFIG_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    config = { ...config, ...saved };
+  } else {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+  }
+} catch (e) {
+  console.error("Error cargando config.json:", e.message);
+}
 
 // Canales en memoria y oradores
 const channels = new Map(); // channelName -> Set of sockets
 const channelSpeakers = new Map(); // channelName -> uid
 
 const server = http.createServer((req, res) => {
-  // Desactivar Nagle a nivel HTTP
+  // Desactivar Nagle a nivel HTTP para respuesta instantánea
   if (req.socket) req.socket.setNoDelay(true);
 
-  // Endpoint para eliminar canales desde la web del admin
+  // Endpoint: Cambiar Política de Transmisión
+  if (req.method === 'POST' && req.url === '/api/set-mode') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        if (data.key !== ADMIN_KEY) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Clave de administrador incorrecta' }));
+        }
+
+        const validModes = ['blocked', 'free', 'conference'];
+        if (!validModes.includes(data.mode)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Modo no válido' }));
+        }
+
+        config.transmissionMode = data.mode;
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+
+        // Notificar a todos los radios conectados
+        broadcastAll({
+          type: 'policy_updated',
+          mode: config.transmissionMode
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          mode: config.transmissionMode,
+          message: `Modo de transmisión actualizado a: ${config.transmissionMode}`
+        }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // Endpoint: Eliminar Canal
   if (req.method === 'POST' && req.url === '/api/delete-channel') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -21,7 +81,7 @@ const server = http.createServer((req, res) => {
         const data = JSON.parse(body);
         if (data.key !== ADMIN_KEY) {
           res.writeHead(403, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ error: 'Clave de admin incorrecta' }));
+          return res.end(JSON.stringify({ error: 'Clave de administrador incorrecta' }));
         }
 
         const channelToDelete = data.channel;
@@ -30,7 +90,6 @@ const server = http.createServer((req, res) => {
           return res.end(JSON.stringify({ error: 'No se puede eliminar el canal principal' }));
         }
 
-        // Mover a los usuarios en ese canal al general
         const clients = channels.get(channelToDelete);
         if (clients) {
           for (const ws of clients) {
@@ -45,11 +104,10 @@ const server = http.createServer((req, res) => {
         }
         channelSpeakers.delete(channelToDelete);
 
-        // Avisar a todos los radios que refresquen su lista
         broadcastAll({ type: 'channel_created' });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, message: `Canal ${channelToDelete} eliminado` }));
+        res.end(JSON.stringify({ success: true, message: `Canal ${channelToDelete} eliminado con éxito` }));
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: e.message }));
@@ -65,22 +123,28 @@ const server = http.createServer((req, res) => {
       const speaker = channelSpeakers.get(name);
       const isGeneral = name === 'Canal 1 (General)';
       return `
-        <div style="background:#1e293b; padding:16px; border-radius:10px; margin-bottom:12px; border-left:5px solid ${speaker ? '#ef4444' : '#10b981'}; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div style="background:#1e293b; padding:14px 18px; border-radius:10px; margin-bottom:10px; border-left:5px solid ${speaker ? '#ef4444' : '#10b981'}; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
           <div>
-            <div style="font-size:1.15rem; font-weight:bold; color:#f8fafc;">📻 ${name}</div>
-            <div style="color:#94a3b8; font-size:0.85rem; margin-top:4px;">
-              Usuarios activos: <span style="color:#38bdf8; font-weight:bold;">${set.size}</span>
-              ${speaker ? `<span style="background:#dc2626; color:#fff; padding:2px 8px; border-radius:12px; margin-left:10px; font-size:0.75rem; font-weight:bold;">HABLANDO: UID ${speaker}</span>` : `<span style="background:#15803d; color:#fff; padding:2px 8px; border-radius:12px; margin-left:10px; font-size:0.75rem;">Libre</span>`}
+            <div style="font-size:1.1rem; font-weight:bold; color:#f8fafc;">📻 ${name}</div>
+            <div style="color:#94a3b8; font-size:0.85rem; margin-top:3px;">
+              Radios en canal: <span style="color:#38bdf8; font-weight:bold;">${set.size}</span>
+              ${speaker ? `<span style="background:#dc2626; color:#fff; padding:2px 8px; border-radius:12px; margin-left:10px; font-size:0.75rem; font-weight:bold;">HABLANDO: UID ${speaker}</span>` : `<span style="background:#15803d; color:#fff; padding:2px 8px; border-radius:12px; margin-left:10px; font-size:0.75rem;">Canal Libre</span>`}
             </div>
           </div>
           ${!isGeneral ? `
-            <button onclick="eliminarCanal('${name}')" style="background:#b91c1c; hover:background:#dc2626; color:#fff; border:none; padding:8px 14px; border-radius:6px; cursor:pointer; font-weight:600; font-size:0.85rem; transition:0.2s;">
-              🗑️ Eliminar Canal
+            <button onclick="eliminarCanal('${name}')" style="background:#dc2626; color:#fff; border:none; padding:7px 12px; border-radius:6px; cursor:pointer; font-weight:600; font-size:0.8rem;">
+              🗑️ Eliminar
             </button>
-          ` : `<span style="color:#64748b; font-size:0.8rem; font-style:italic;">Canal Protegido</span>`}
+          ` : `<span style="color:#64748b; font-size:0.8rem; font-style:italic;">Canal Fijo</span>`}
         </div>
       `;
-    }).join('') || '<div style="color:#94a3b8; text-align:center; padding:20px;">No hay canales con actividad en memoria todavía.</div>';
+    }).join('') || '<div style="color:#94a3b8; text-align:center; padding:15px; background:#1e293b; border-radius:8px;">No hay canales en memoria todavía.</div>';
+
+    const modeLabels = {
+      'blocked': '🔒 Modo 1: Radio Profesional (Bloqueo de Canal Ocupado)',
+      'free': '🔓 Modo 2: Modo Libre (Sin Restricciones)',
+      'conference': '👥 Modo 3: Modo Conferencia (Múltiples Oradores)'
+    };
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -92,17 +156,52 @@ const server = http.createServer((req, res) => {
         <title>Volkee - Panel Central PTT</title>
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
-          .container { max-width: 720px; margin: 0 auto; }
-          .card { background: #1e293b; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); }
+          .container { max-width: 760px; margin: 0 auto; }
+          .card { background: #1e293b; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); margin-bottom: 20px; }
           .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 0.85rem; font-weight: 600; background: #10b981; color: #fff; }
-          .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }
+          .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; }
           .stat-box { background: #0f172a; padding: 15px; border-radius: 8px; text-align: center; }
           .stat-num { font-size: 2rem; font-weight: bold; color: #38bdf8; }
           .stat-label { font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; margin-top: 5px; }
+          .mode-option { background: #0f172a; border: 2px solid #334155; padding: 14px; border-radius: 8px; margin-bottom: 10px; cursor: pointer; transition: 0.2s; }
+          .mode-option:hover { border-color: #38bdf8; }
+          .mode-option.active { border-color: #10b981; background: #064e3b22; }
+          .btn-save { background: #2563eb; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 0.95rem; width: 100%; transition: 0.2s; }
+          .btn-save:hover { background: #1d4ed8; }
         </style>
         <script>
+          let selectedMode = "${config.transmissionMode}";
+
+          function selectMode(m) {
+            selectedMode = m;
+            document.querySelectorAll('.mode-option').forEach(el => el.classList.remove('active'));
+            document.getElementById('opt-' + m).classList.add('active');
+            document.getElementById('radio-' + m).checked = true;
+          }
+
+          async function guardarPolitica() {
+            const clave = prompt('Ingresa la clave de administrador para aplicar este modo:');
+            if (!clave) return;
+            try {
+              const res = await fetch('/api/set-mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: selectedMode, key: clave })
+              });
+              const json = await res.json();
+              if (res.ok) {
+                alert('¡Éxito! ' + json.message);
+                location.reload();
+              } else {
+                alert('Error: ' + (json.error || 'No se pudo actualizar'));
+              }
+            } catch (e) {
+              alert('Error de conexión: ' + e.message);
+            }
+          }
+
           async function eliminarCanal(canal) {
-            const clave = prompt('Ingresa la clave de administrador para eliminar el canal "' + canal + '":');
+            const clave = prompt('Ingresa la clave de administrador para eliminar "' + canal + '":');
             if (!clave) return;
             try {
               const res = await fetch('/api/delete-channel', {
@@ -112,7 +211,7 @@ const server = http.createServer((req, res) => {
               });
               const json = await res.json();
               if (res.ok) {
-                alert(json.message || 'Canal eliminado exitosamente');
+                alert(json.message);
                 location.reload();
               } else {
                 alert('Error: ' + (json.error || 'No se pudo eliminar'));
@@ -125,11 +224,11 @@ const server = http.createServer((req, res) => {
       </head>
       <body>
         <div class="container">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px;">
             <div style="display:flex; align-items:center; gap:12px;">
               <span style="font-size:2.2rem;">📻</span>
               <div>
-                <h1 style="margin:0; font-size: 1.6rem; color:#f8fafc;">Volkee Radio Server</h1>
+                <h1 style="margin:0; font-size: 1.5rem; color:#f8fafc;">Volkee Central Server</h1>
                 <p style="margin:0; color:#94a3b8; font-size: 0.85rem;">Servidor PTT de Ultra-Baja Latencia | CIRE UNAH</p>
               </div>
             </div>
@@ -147,16 +246,62 @@ const server = http.createServer((req, res) => {
             </div>
           </div>
 
-          <h3 style="margin-top:25px; margin-bottom:12px; color:#cbd5e1;">Canales en Vivo</h3>
+          <!-- Selector de Modo de Transmisión -->
+          <div class="card" style="border-top:4px solid #38bdf8;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h3 style="margin:0; font-size:1.15rem; color:#38bdf8;">⚙️ Modo de Transmisión Activo</h3>
+              <span style="font-size:0.8rem; background:#334155; padding:3px 8px; border-radius:6px; color:#cbd5e1;">Admin: admin123</span>
+            </div>
+            <p style="color:#94a3b8; font-size:0.85rem; margin-top:0; margin-bottom:14px;">
+              Selecciona cómo se comportará el botón PTT en todos los radios conectados:
+            </p>
+
+            <div id="opt-blocked" class="mode-option ${config.transmissionMode === 'blocked' ? 'active' : ''}" onclick="selectMode('blocked')">
+              <label style="cursor:pointer; display:flex; gap:10px; align-items:flex-start;">
+                <input type="radio" id="radio-blocked" name="mode" value="blocked" ${config.transmissionMode === 'blocked' ? 'checked' : ''} style="margin-top:3px;">
+                <div>
+                  <strong style="color:#f8fafc; font-size:0.95rem;">🔒 Opción 1: Radio Profesional PTT (Bloqueo de Canal Ocupado) — RECOMENDADO</strong>
+                  <div style="color:#94a3b8; font-size:0.8rem; margin-top:3px;">
+                    El primero que presiona toma la frecuencia. Si otra persona intenta hablar a la vez, el servidor no la deja y la app emite tono de canal ocupado para no pisarse.
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div id="opt-free" class="mode-option ${config.transmissionMode === 'free' ? 'active' : ''}" onclick="selectMode('free')">
+              <label style="cursor:pointer; display:flex; gap:10px; align-items:flex-start;">
+                <input type="radio" id="radio-free" name="mode" value="free" ${config.transmissionMode === 'free' ? 'checked' : ''} style="margin-top:3px;">
+                <div>
+                  <strong style="color:#f8fafc; font-size:0.95rem;">🔓 Opción 2: Modo Libre (Sin Restricciones)</strong>
+                  <div style="color:#94a3b8; font-size:0.8rem; margin-top:3px;">
+                    Cualquiera puede transmitir libremente guiándose por el aviso en la pantalla LCD.
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <div id="opt-conference" class="mode-option ${config.transmissionMode === 'conference' ? 'active' : ''}" onclick="selectMode('conference')">
+              <label style="cursor:pointer; display:flex; gap:10px; align-items:flex-start;">
+                <input type="radio" id="radio-conference" name="mode" value="conference" ${config.transmissionMode === 'conference' ? 'checked' : ''} style="margin-top:3px;">
+                <div>
+                  <strong style="color:#f8fafc; font-size:0.95rem;">👥 Opción 3: Modo Conferencia (Múltiples Oradores)</strong>
+                  <div style="color:#94a3b8; font-size:0.8rem; margin-top:3px;">
+                    Permite que varias personas transmitan simultáneamente al estilo de una llamada grupal.
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <button class="btn-save" onclick="guardarPolitica()">💾 Guardar y Aplicar Modo en Vivo</button>
+          </div>
+
+          <h3 style="margin-top:20px; margin-bottom:10px; color:#cbd5e1;">Canales en Vivo</h3>
           ${channelListHtml}
 
-          <div style="margin-top:30px; text-align:center; color:#64748b; font-size:0.8rem;">
-            Actualización automática cada 3s • Latencia optimizada TCP_NODELAY
+          <div style="margin-top:25px; text-align:center; color:#64748b; font-size:0.8rem;">
+            Modo actual: <b>${modeLabels[config.transmissionMode] || config.transmissionMode}</b> • TCP_NODELAY activo
           </div>
         </div>
-        <script>
-          setTimeout(() => location.reload(), 3000);
-        </script>
       </body>
       </html>
     `);
@@ -171,7 +316,7 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws, req) => {
-  // Desactivar algoritmo de Nagle para enviar paquetes de audio instantáneamente
+  // Desactivar Nagle para enviar cada paquete de audio sin delay
   if (req && req.socket) {
     req.socket.setNoDelay(true);
   }
@@ -185,11 +330,22 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('message', (data, isBinary) => {
-    // Si es audio binario (PCM 16-bit)
+    // Si es audio binario (PCM 16-bit 16kHz)
     if (isBinary) {
-      if (ws.currentChannel) {
-        broadcastAudio(ws.currentChannel, data, ws);
+      if (!ws.currentChannel) return;
+
+      // REGLA DE POLÍTICA:
+      // Si el modo es 'blocked' (Radio Profesional): solo transmite el orador oficial del canal
+      if (config.transmissionMode === 'blocked') {
+        const activeSpeaker = channelSpeakers.get(ws.currentChannel);
+        if (activeSpeaker && activeSpeaker !== ws.uid) {
+          // Descartar audio del segundo orador para que nadie se pise
+          return;
+        }
       }
+
+      // Transmitir a todos los demás en el canal
+      broadcastAudio(ws.currentChannel, data, ws);
       return;
     }
 
@@ -207,6 +363,21 @@ wss.on('connection', (ws, req) => {
 
         case 'talk_start':
           if (ws.currentChannel) {
+            // VERIFICACIÓN DE POLÍTICA EN MODO BLOQUEO:
+            if (config.transmissionMode === 'blocked') {
+              const currentSpeaker = channelSpeakers.get(ws.currentChannel);
+              if (currentSpeaker && currentSpeaker !== msg.uid) {
+                // El canal ya está ocupado: notificar al usuario
+                ws.send(JSON.stringify({
+                  type: 'channel_busy',
+                  speakerUid: currentSpeaker,
+                  channel: ws.currentChannel
+                }));
+                return;
+              }
+            }
+
+            // Canal asignado a este orador
             channelSpeakers.set(ws.currentChannel, msg.uid);
             broadcastJson(ws.currentChannel, {
               type: 'talk_start',
@@ -218,7 +389,9 @@ wss.on('connection', (ws, req) => {
 
         case 'talk_stop':
           if (ws.currentChannel) {
-            channelSpeakers.delete(ws.currentChannel);
+            if (channelSpeakers.get(ws.currentChannel) === msg.uid) {
+              channelSpeakers.delete(ws.currentChannel);
+            }
             broadcastJson(ws.currentChannel, {
               type: 'talk_stop',
               channel: ws.currentChannel,
@@ -228,7 +401,6 @@ wss.on('connection', (ws, req) => {
           break;
 
         case 'channel_created':
-          // Reenviar a todos para que actualicen su lista de canales
           broadcastAll({ type: 'channel_created' });
           break;
       }
@@ -263,7 +435,8 @@ function joinChannel(ws, channelName, uid) {
     type: 'joined',
     channel: channelName,
     uid: uid,
-    speakerUid: speaker || null
+    speakerUid: speaker || null,
+    mode: config.transmissionMode
   }));
 }
 
@@ -326,7 +499,7 @@ function broadcastAll(payload) {
   }
 }
 
-// Keep-alive cada 20s
+// Keep-alive cada 20 segundos
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) {
@@ -343,10 +516,11 @@ wss.on('close', () => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`===============================================`);
-  console.log(`📻 VOLKEE RADIO SERVER - ULTRA BAJA LATENCIA`);
+  console.log(`===================================================`);
+  console.log(`📻 VOLKEE CENTRAL SERVER - MODO CONTROLADO`);
   console.log(`📡 Puerto local: http://localhost:${PORT}`);
   console.log(`🌐 Enlace Cloudflare: https://radio.cire-unah.site`);
-  console.log(`🔑 Clave Web Admin: ${ADMIN_KEY}`);
-  console.log(`===============================================`);
+  console.log(`⚙️ Modo de transmisión actual: ${config.transmissionMode}`);
+  console.log(`🔑 Clave de Administración: ${ADMIN_KEY}`);
+  console.log(`===================================================`);
 });
