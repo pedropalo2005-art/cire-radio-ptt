@@ -619,4 +619,22 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
             }
         }
     }
+
+    override fun onChannelBusy(speakerUid: Int) {
+        vibrateFeedback(200)
+        binding.tvFrequency.text = "CANAL OCUPADO [UID:$speakerUid]"
+        binding.tvFrequency.setTextColor(ContextCompat.getColor(this, R.color.led_tx_active))
+        binding.tvChannelDesc.text = "⚠️ Espera a que termine de hablar"
+        binding.cardPtt.setCardBackgroundColor(ContextCompat.getColor(this, R.color.led_tx_active))
+        binding.root.postDelayed({
+            if (!isTransmitting) {
+                binding.cardPtt.setCardBackgroundColor(ContextCompat.getColor(this, R.color.ptt_idle_base))
+                binding.tvFrequency.text = "ONLINE [UID:${radioManager.myUid}]"
+                binding.tvFrequency.setTextColor(ContextCompat.getColor(this, R.color.radio_lcd_text))
+                if (channelList.isNotEmpty() && currentChannelIndex in channelList.indices) {
+                    binding.tvChannelDesc.text = channelList[currentChannelIndex].description
+                }
+            }
+        }, 1500)
+    }
 }
