@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">CIRE Radio PTT</string>
+    <string name="app_name">Volkee</string>
     <string name="ptt_idle">MANTÉN PRESIONADO PARA HABLAR</string>
     <string name="ptt_transmitting">TRANSMITIENDO EN VIVO...</string>
     <string name="channel_label">CANAL SELECCIONADO</string>
