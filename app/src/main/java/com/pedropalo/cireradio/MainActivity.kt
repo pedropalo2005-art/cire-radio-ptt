@@ -23,6 +23,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
@@ -56,6 +57,16 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
         unlockedChannels.add(channelId)
         val prefs = getSharedPreferences("cire_unlocked_prefs", Context.MODE_PRIVATE)
         prefs.edit().putStringSet("unlocked_ids", unlockedChannels).apply()
+    }
+
+    private fun getMyDeviceId(): String {
+        val prefs = getSharedPreferences("volkee_device_prefs", Context.MODE_PRIVATE)
+        var id = prefs.getString("device_id", null)
+        if (id.isNullOrBlank()) {
+            id = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString("device_id", id).apply()
+        }
+        return id
     }
 
     private val permissionLauncher = registerForActivityResult(
@@ -103,7 +114,7 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
         }
         radioManager.initEngine(RadioManager.DEFAULT_SERVER_URL)
 
-        binding.tvServerInfo.text = "SERVIDOR: radio.cire-unah.site"
+        binding.tvServerInfo.text = "VOLKEE: radio.cire-unah.site"
 
         checkAndRequestPermissions()
         checkBatteryOptimization()
@@ -164,7 +175,7 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
 
     private fun setupRadio() {
         lifecycleScope.launch {
-            binding.tvChannelDesc.text = "Sincronizando canales CIRE..."
+            binding.tvChannelDesc.text = "Sincronizando canales Volkee..."
             channelList = SupabaseClient.getChannels()
 
             if (channelList.isNotEmpty()) {
@@ -296,7 +307,7 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
             btnConfirm.text = "Creando..."
 
             lifecycleScope.launch {
-                val result = SupabaseClient.createChannel(name, isPrivate, if (isPrivate) pin else null)
+                val result = SupabaseClient.createChannel(name, isPrivate, if (isPrivate) pin else null, getMyDeviceId())
                 result.onSuccess { created ->
                     saveUnlockedChannel(created.id)
                     channelList = SupabaseClient.getChannels()
@@ -304,7 +315,6 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
                     updateChannelUi(newIndex)
                     Toast.makeText(this@MainActivity, "Canal '${created.name}' creado exitosamente", Toast.LENGTH_LONG).show()
                     dialog.dismiss()
-                    // Broadcast to all other devices in real-time
                     radioManager.broadcastChannelCreated()
                 }.onFailure { err ->
                     btnConfirm.isEnabled = true
@@ -350,6 +360,7 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
                 val tvRowDesc = rowView.findViewById<TextView>(R.id.tvRowChannelDesc)
                 val tvRowBadge = rowView.findViewById<TextView>(R.id.tvRowBadge)
                 val tvRowStatus = rowView.findViewById<TextView>(R.id.tvRowStatus)
+                val btnDelete = rowView.findViewById<ImageButton>(R.id.btnRowDelete)
                 val rowLayout = rowView.findViewById<LinearLayout>(R.id.llChannelRow)
 
                 tvRowName.text = ch.name
@@ -370,6 +381,19 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
                     tvRowStatus.text = "En Sintonía ●"
                 } else {
                     tvRowStatus.visibility = View.GONE
+                }
+
+                // Delete button for creator
+                val isCreator = ch.creatorDeviceId.isNotBlank() && ch.creatorDeviceId == getMyDeviceId()
+                val isProtected = ch.name.equals("Canal 1 (General)", ignoreCase = true)
+
+                if (isCreator && !isProtected) {
+                    btnDelete.visibility = View.VISIBLE
+                    btnDelete.setOnClickListener {
+                        confirmDeleteChannel(ch, dialog)
+                    }
+                } else {
+                    btnDelete.visibility = View.GONE
                 }
 
                 rowLayout.setOnClickListener {
@@ -413,6 +437,32 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
         }
 
         dialog.show()
+    }
+
+    private fun confirmDeleteChannel(channel: RadioChannel, parentDialog: AlertDialog) {
+        AlertDialog.Builder(this)
+            .setTitle("🗑️ Eliminar Canal")
+            .setMessage("¿Estás seguro de que deseas eliminar el canal '${channel.name}'?\nEsta acción lo borrará permanentemente para todos los radios.")
+            .setPositiveButton("Eliminar") { _, _ ->
+                lifecycleScope.launch {
+                    val res = SupabaseClient.deleteChannel(channel.id)
+                    res.onSuccess {
+                        Toast.makeText(this@MainActivity, "Canal '${channel.name}' eliminado", Toast.LENGTH_SHORT).show()
+                        parentDialog.dismiss()
+                        if (channelList.isNotEmpty() && channelList[currentChannelIndex].name == channel.name) {
+                            trySelectChannel(0)
+                        } else {
+                            val fresh = SupabaseClient.getChannels()
+                            channelList = fresh
+                        }
+                        radioManager.broadcastChannelCreated()
+                    }.onFailure { err ->
+                        Toast.makeText(this@MainActivity, "Error al eliminar: ${err.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     @SuppressLint("ClickableViewAccessibility")
