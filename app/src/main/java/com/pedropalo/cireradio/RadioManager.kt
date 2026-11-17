@@ -93,7 +93,7 @@ class RadioManager(
                 AudioFormat.ENCODING_PCM_16BIT
             )
 
-            audioTrack = AudioTrack.Builder()
+            val builder = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -107,10 +107,14 @@ class RadioManager(
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .build()
                 )
-                .setBufferSizeInBytes(minBuf.coerceAtLeast(BUFFER_CHUNK_SIZE * 6))
+                .setBufferSizeInBytes(minBuf) // Minimal hardware buffer for zero latency
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
 
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            }
+
+            audioTrack = builder.build()
             audioTrack?.play()
             ensureLoudspeaker()
         } catch (e: Exception) {
@@ -149,7 +153,11 @@ class RadioManager(
                 // Incoming real-time audio chunk from another radio!
                 try {
                     val raw = bytes.toByteArray()
-                    audioTrack?.write(raw, 0, raw.size)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        audioTrack?.write(raw, 0, raw.size, AudioTrack.WRITE_NON_BLOCKING)
+                    } else {
+                        audioTrack?.write(raw, 0, raw.size)
+                    }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -196,6 +204,11 @@ class RadioManager(
                 "talk_start" -> {
                     val speakerUid = json.optInt("uid", 0)
                     if (speakerUid != myUid) {
+                        try {
+                            audioTrack?.pause()
+                            audioTrack?.flush()
+                            audioTrack?.play()
+                        } catch (e: Exception) {}
                         mainHandler.post {
                             ensureLoudspeaker()
                             listener.onRemoteUserTalking(true, speakerUid)
@@ -205,6 +218,11 @@ class RadioManager(
                 "talk_stop" -> {
                     val speakerUid = json.optInt("uid", 0)
                     if (speakerUid != myUid) {
+                        try {
+                            audioTrack?.pause()
+                            audioTrack?.flush()
+                            audioTrack?.play()
+                        } catch (e: Exception) {}
                         mainHandler.post {
                             listener.onRemoteUserTalking(false, speakerUid)
                         }
@@ -304,12 +322,29 @@ class RadioManager(
                 AudioFormat.ENCODING_PCM_16BIT
             )
 
-            audioRecord = AudioRecord(
+            val recBuilder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                AudioRecord.Builder()
+                    .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(SAMPLE_RATE)
+                            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(minBuf)
+            } else null
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && recBuilder != null) {
+                recBuilder.setPerformanceMode(AudioRecord.PERFORMANCE_MODE_LOW_LATENCY)
+            }
+
+            audioRecord = recBuilder?.build() ?: AudioRecord(
                 MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                minBuf.coerceAtLeast(BUFFER_CHUNK_SIZE * 4)
+                minBuf
             )
 
             try {
