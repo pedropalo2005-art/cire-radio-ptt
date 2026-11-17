@@ -73,6 +73,18 @@
                 android:visibility="gone" />
         </LinearLayout>
 
+        <!-- Delete button (visible only to creator) -->
+        <ImageButton
+            android:id="@+id/btnRowDelete"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="8dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_delete"
+            app:tint="#ef4444"
+            android:contentDescription="Eliminar canal"
+            android:visibility="gone" />
+
     </LinearLayout>
 
 </androidx.cardview.widget.CardView>
