@@ -304,6 +304,8 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
                     updateChannelUi(newIndex)
                     Toast.makeText(this@MainActivity, "Canal '${created.name}' creado exitosamente", Toast.LENGTH_LONG).show()
                     dialog.dismiss()
+                    // Broadcast to all other devices in real-time
+                    radioManager.broadcastChannelCreated()
                 }.onFailure { err ->
                     btnConfirm.isEnabled = true
                     btnConfirm.text = "Crear Canal"
@@ -384,6 +386,15 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
 
         populate()
 
+        // Auto-refresh channel list from Supabase in background
+        lifecycleScope.launch {
+            val fresh = SupabaseClient.getChannels()
+            if (fresh.isNotEmpty()) {
+                channelList = fresh
+                populate(etSearch.text?.toString() ?: "")
+            }
+        }
+
         etSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
@@ -451,6 +462,12 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
     override fun onResume() {
         super.onResume()
         radioManager.ensureLoudspeaker()
+        lifecycleScope.launch {
+            val fresh = SupabaseClient.getChannels()
+            if (fresh.isNotEmpty()) {
+                channelList = fresh
+            }
+        }
     }
 
     // Physical Volume Down PTT
@@ -542,5 +559,14 @@ class MainActivity : AppCompatActivity(), RadioManager.Listener {
     override fun onEngineError(errCode: Int, message: String) {
         binding.tvFrequency.text = message
         binding.tvFrequency.setTextColor(Color.RED)
+    }
+
+    override fun onChannelListUpdated() {
+        lifecycleScope.launch {
+            val fresh = SupabaseClient.getChannels()
+            if (fresh.isNotEmpty()) {
+                channelList = fresh
+            }
+        }
     }
 }
